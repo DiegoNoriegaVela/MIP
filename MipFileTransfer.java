@@ -1,3 +1,8 @@
+import java.io.*;
+import java.net.*;
+import java.nio.charset.Charset;
+import java.util.Calendar;
+
 /**
  * MipFileTransfer - Sistema de Transferencia de Archivos IPM hacia/desde MIP de Mastercard
  * 
