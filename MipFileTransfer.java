@@ -50,6 +50,9 @@ public final class MipFileTransfer {
     
     // Tamanio maximo de datos por bloque segun especificacion Mastercard (pag. 50, 53)
     private static final int DATA_CHUNK = 1014;
+    
+    // Flag de debug para diagnostico detallado
+    private static final boolean DEBUG = Boolean.getBoolean("mip.debug");
 
     public static void main(String[] args) {
         try {
@@ -103,7 +106,11 @@ public final class MipFileTransfer {
             "       --file /data/ipm_out.dat --ipmname R11902840\n" +
             "\n" +
             "  java MipFileTransfer --mode receive --ip 10.0.0.1 --port 5000 \\\n" +
-            "       --file /data/ipm_in.dat --ipmname T11200157");
+            "       --file /data/ipm_in.dat --ipmname T11200157\n" +
+            "\n" +
+            "Debug:\n" +
+            "  Para diagnostico detallado, ejecutar con:\n" +
+            "  java -Dmip.debug=true MipFileTransfer ...");
     }
 
     /**
@@ -234,6 +241,9 @@ public final class MipFileTransfer {
         System.out.println("Archivo destino: " + p.filePath);
         System.out.println("Transmission ID: " + txId);
         System.out.println("MIP Host       : " + p.ip + ":" + p.port);
+        if (DEBUG) {
+            System.out.println("Modo DEBUG     : ACTIVADO");
+        }
         System.out.println("==============================================");
 
         // Extraer el numero de secuencia actual del Transmission ID
@@ -332,6 +342,12 @@ public final class MipFileTransfer {
                         while (true) {
                             Frame dataFrame = readFramed(in);
                             
+                            if (DEBUG) {
+                                System.out.println("  DEBUG: Frame recibido, size=" + dataFrame.data.length);
+                                System.out.println("  DEBUG: Primeros bytes (hex): " + 
+                                    hexBytes(dataFrame.data, 0, Math.min(16, dataFrame.data.length)));
+                            }
+                            
                             // Verificar si es un bloque de datos o el trailer
                             String firstBytes = dataFrame.asEbcdic(0, 3);
                             if ("998".equals(firstBytes)) {
@@ -361,16 +377,73 @@ public final class MipFileTransfer {
                             }
                             
                             // Es un bloque de datos
-                            // Verificar Direction Indicator 'T'
-                            char dirIndicator = (char) dataFrame.data[0];
-                            if (dirIndicator != 'T' && dirIndicator != 0xE3) {
-                                // 0xE3 es 'T' en EBCDIC
-                                System.err.println("ADVERTENCIA: Direction Indicator esperado 'T', recibi: 0x" 
-                                    + String.format("%02X", (int)dirIndicator));
+                            // Analizar estructura para detectar RDW adicional o padding
+                            int dataStart = 0;
+                            
+                            // DETECCION INTELIGENTE DE ESTRUCTURA:
+                            // Caso 1: RDW de 4 bytes + Direction Indicator
+                            // Caso 2: Solo Direction Indicator
+                            // Caso 3: Padding (0xFF) + Direction Indicator
+                            
+                            if (dataFrame.data.length >= 5) {
+                                // Intentar detectar RDW (4 bytes Big-Endian con longitud razonable)
+                                int possibleRdw = ((dataFrame.data[0] & 0xFF) << 24) |
+                                                 ((dataFrame.data[1] & 0xFF) << 16) |
+                                                 ((dataFrame.data[2] & 0xFF) << 8) |
+                                                 (dataFrame.data[3] & 0xFF);
+                                
+                                // Si es un RDW valido (positivo y menor que frame size)
+                                if (possibleRdw > 0 && possibleRdw < dataFrame.data.length - 4) {
+                                    dataStart = 4;
+                                    if (DEBUG) {
+                                        System.out.println("  DEBUG: Detectado RDW de " + possibleRdw + " bytes, ajustando offset");
+                                    }
+                                }
                             }
                             
-                            // Escribir datos al archivo (desde posicion 1, sin el Direction Indicator)
-                            fos.write(dataFrame.data, 1, dataFrame.data.length - 1);
+                            // Verificar Direction Indicator en posicion ajustada
+                            int dirIndicatorUnsigned = dataFrame.data[dataStart] & 0xFF;
+                            
+                            if (DEBUG) {
+                                System.out.println("  DEBUG: Direction Indicator en pos " + dataStart + ": 0x" + 
+                                    String.format("%02X", dirIndicatorUnsigned));
+                            }
+                            
+                            // 0xE3 es 'T' en EBCDIC
+                            if (dirIndicatorUnsigned != 0xE3) {
+                                // Intentar detectar si hay padding 0xFF antes del Direction Indicator
+                                if (dirIndicatorUnsigned == 0xFF && dataStart + 1 < dataFrame.data.length) {
+                                    int nextByte = dataFrame.data[dataStart + 1] & 0xFF;
+                                    if (nextByte == 0xE3) {
+                                        // Encontrado: 0xFF seguido de 0xE3 ('T')
+                                        dataStart++; // Saltar el 0xFF
+                                        dirIndicatorUnsigned = nextByte;
+                                        if (DEBUG) {
+                                            System.out.println("  DEBUG: Detectado padding 0xFF, ajustando a pos " + dataStart);
+                                        }
+                                    }
+                                }
+                                
+                                // Si aun no es 0xE3, mostrar advertencia
+                                if (dirIndicatorUnsigned != 0xE3) {
+                                    System.err.println("ADVERTENCIA: Direction Indicator esperado 'T' (0xE3), recibi: 0x" 
+                                        + String.format("%02X", dirIndicatorUnsigned));
+                                    
+                                    if (DEBUG) {
+                                        System.err.println("  DEBUG: Contexto (20 bytes): " + 
+                                            hexBytes(dataFrame.data, 0, Math.min(20, dataFrame.data.length)));
+                                    }
+                                }
+                            }
+                            
+                            // Escribir datos al archivo (desde dataStart + 1, saltando Direction Indicator)
+                            int payloadStart = dataStart + 1;
+                            int payloadLength = dataFrame.data.length - payloadStart;
+                            
+                            if (payloadLength > 0) {
+                                fos.write(dataFrame.data, payloadStart, payloadLength);
+                            }
+                            
                             blocksReceived++;
                             
                             if (blocksReceived % 10 == 0) {
@@ -670,6 +743,22 @@ public final class MipFileTransfer {
             (byte)((v >>> 8)  & 0xFF),
             (byte)(v & 0xFF)
         };
+    }
+
+    /**
+     * Convierte array de bytes a string hexadecimal para debug
+     * 
+     * @param data Array de bytes
+     * @param offset Posicion inicial
+     * @param length Numero de bytes a convertir
+     * @return String con representacion hexadecimal
+     */
+    private static String hexBytes(byte[] data, int offset, int length) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = offset; i < offset + length && i < data.length; i++) {
+            sb.append(String.format("%02X ", data[i] & 0xFF));
+        }
+        return sb.toString().trim();
     }
 
     /**
