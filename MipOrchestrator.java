@@ -86,11 +86,9 @@ import java.util.*;
  * 
  * INTEGRACION:
  * 
- * Este programa NO reimplementa logica, sino que invoca:
- * - MipFileTransfer.main() para transferencias
- * - Rdw1014Tool.main() para conversiones
- * 
- * Ambos componentes deben estar compilados y en el classpath.
+ * Este programa invoca MipFileTransfer y Rdw1014Tool como procesos externos
+ * usando java -cp, lo que permite desacoplamiento completo y manejo robusto
+ * de errores. Ambos componentes deben estar compilados (.class) y en el classpath.
  * 
  * Referencias:
  * - MipFileTransfer: Protocolo MIP de Mastercard
@@ -340,14 +338,13 @@ public class MipOrchestrator {
     }
 
     /* ========================================================================
-     * INVOCACION DE COMPONENTES
+     * INVOCACION DE COMPONENTES MEDIANTE PROCESOS EXTERNOS
      * ======================================================================== */
 
     /**
-     * Envia archivo directamente usando MipFileTransfer
+     * Envia archivo directamente usando MipFileTransfer como proceso externo
      * 
-     * Invoca MipFileTransfer.main() con los parametros apropiados
-     * para realizar la transferencia al MIP.
+     * Ejecuta: java MipFileTransfer --mode send --ip ... --port ... --file ... --ipmname ...
      * 
      * @param ip Direccion IP del MIP
      * @param port Puerto del MIP
@@ -357,23 +354,28 @@ public class MipOrchestrator {
      */
     private static void sendFileDirect(String ip, int port, String filePath, String ipmName) 
             throws Exception {
-        String[] args = {
-            "--mode", "send",
-            "--ip", ip,
-            "--port", String.valueOf(port),
-            "--file", filePath,
-            "--ipmname", ipmName
-        };
         
-        // Invocar MipFileTransfer
-        MipFileTransfer.main(args);
+        List<String> command = new ArrayList<String>();
+        command.add("java");
+        command.add("MipFileTransfer");
+        command.add("--mode");
+        command.add("send");
+        command.add("--ip");
+        command.add(ip);
+        command.add("--port");
+        command.add(String.valueOf(port));
+        command.add("--file");
+        command.add(filePath);
+        command.add("--ipmname");
+        command.add(ipmName);
+        
+        executeJavaProcess(command, "MipFileTransfer (send)");
     }
 
     /**
-     * Recibe archivo directamente usando MipFileTransfer
+     * Recibe archivo directamente usando MipFileTransfer como proceso externo
      * 
-     * Invoca MipFileTransfer.main() con los parametros apropiados
-     * para realizar la recepcion desde el MIP.
+     * Ejecuta: java MipFileTransfer --mode receive --ip ... --port ... --file ... --ipmname ...
      * 
      * @param ip Direccion IP del MIP
      * @param port Puerto del MIP
@@ -383,26 +385,28 @@ public class MipOrchestrator {
      */
     private static void receiveFileDirect(String ip, int port, String filePath, String ipmName) 
             throws Exception {
-        String[] args = {
-            "--mode", "receive",
-            "--ip", ip,
-            "--port", String.valueOf(port),
-            "--file", filePath,
-            "--ipmname", ipmName
-        };
         
-        // Invocar MipFileTransfer
-        MipFileTransfer.main(args);
+        List<String> command = new ArrayList<String>();
+        command.add("java");
+        command.add("MipFileTransfer");
+        command.add("--mode");
+        command.add("receive");
+        command.add("--ip");
+        command.add(ip);
+        command.add("--port");
+        command.add(String.valueOf(port));
+        command.add("--file");
+        command.add(filePath);
+        command.add("--ipmname");
+        command.add(ipmName);
+        
+        executeJavaProcess(command, "MipFileTransfer (receive)");
     }
 
     /**
-     * Codifica archivo ASCII a formato IPM usando Rdw1014Tool
+     * Codifica archivo ASCII a formato IPM usando Rdw1014Tool como proceso externo
      * 
-     * Invoca Rdw1014Tool.main() en modo encode para convertir
-     * un archivo de texto ASCII a formato IPM con:
-     * - RDW de 4 bytes Big-Endian
-     * - Codificacion EBCDIC Cp500
-     * - 1014-blocking
+     * Ejecuta: java Rdw1014Tool encode --input ... --output ...
      * 
      * @param inputAscii Path del archivo ASCII de entrada
      * @param outputIpm Path del archivo IPM de salida
@@ -410,27 +414,23 @@ public class MipOrchestrator {
      */
     private static void encodeAsciiToIpm(String inputAscii, String outputIpm) 
             throws Exception {
-        String[] args = {
-            "encode",
-            "--input", inputAscii,
-            "--output", outputIpm
-        };
         
-        // Invocar Rdw1014Tool
-        Rdw1014Tool.main(args);
+        List<String> command = new ArrayList<String>();
+        command.add("java");
+        command.add("Rdw1014Tool");
+        command.add("encode");
+        command.add("--input");
+        command.add(inputAscii);
+        command.add("--output");
+        command.add(outputIpm);
+        
+        executeJavaProcess(command, "Rdw1014Tool (encode)");
     }
 
     /**
-     * Decodifica archivo IPM a formato ASCII usando Rdw1014Tool
+     * Decodifica archivo IPM a formato ASCII usando Rdw1014Tool como proceso externo
      * 
-     * Invoca Rdw1014Tool.main() en modo decode para convertir
-     * un archivo IPM a registros individuales en ASCII.
-     * 
-     * Genera en el directorio de salida:
-     * - record_NNNN.bin: Datos binarios por registro
-     * - record_NNNN.ebcdic.txt: Vista EBCDIC por registro
-     * - record_NNNN.ascii.txt: Vista ASCII legible por registro
-     * - report.txt: Reporte con estadisticas
+     * Ejecuta: java Rdw1014Tool decode --input ... --output ...
      * 
      * @param inputIpm Path del archivo IPM de entrada
      * @param outputDir Path del directorio de salida
@@ -438,14 +438,57 @@ public class MipOrchestrator {
      */
     private static void decodeIpmToAscii(String inputIpm, String outputDir) 
             throws Exception {
-        String[] args = {
-            "decode",
-            "--input", inputIpm,
-            "--output", outputDir
-        };
         
-        // Invocar Rdw1014Tool
-        Rdw1014Tool.main(args);
+        List<String> command = new ArrayList<String>();
+        command.add("java");
+        command.add("Rdw1014Tool");
+        command.add("decode");
+        command.add("--input");
+        command.add(inputIpm);
+        command.add("--output");
+        command.add(outputDir);
+        
+        executeJavaProcess(command, "Rdw1014Tool (decode)");
+    }
+
+    /**
+     * Ejecuta un proceso Java externo y captura su salida
+     * 
+     * Este metodo:
+     * 1. Construye el comando completo
+     * 2. Inicia el proceso
+     * 3. Redirige stdout y stderr al proceso actual
+     * 4. Espera a que termine
+     * 5. Valida el exit code
+     * 
+     * @param command Lista con comando y argumentos
+     * @param processName Nombre descriptivo del proceso (para mensajes)
+     * @throws Exception Si el proceso falla (exit code != 0)
+     */
+    private static void executeJavaProcess(List<String> command, String processName) 
+            throws Exception {
+        
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true); // Combinar stderr con stdout
+        
+        Process process = pb.start();
+        
+        // Leer y mostrar salida del proceso
+        BufferedReader reader = new BufferedReader(
+            new InputStreamReader(process.getInputStream()));
+        
+        String line;
+        while ((line = reader.readLine()) != null) {
+            System.out.println(line);
+        }
+        
+        // Esperar a que termine
+        int exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            throw new Exception(
+                processName + " fallo con exit code " + exitCode);
+        }
     }
 
     /* ========================================================================
@@ -557,6 +600,7 @@ public class MipOrchestrator {
             "Componentes Requeridos:\n" +
             "  - MipFileTransfer.class : Transferencia TCP/IP con MIP\n" +
             "  - Rdw1014Tool.class     : Conversion EBCDIC/ASCII con RDW\n" +
+            "  - Ambos deben estar en el mismo directorio que MipOrchestrator.class\n" +
             "\n" +
             "Exit Codes:\n" +
             "  0 : Operacion exitosa\n" +
