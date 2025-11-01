@@ -2,33 +2,33 @@ import java.io.*;
 import java.util.*;
 
 /**
- * MipOrchestrator - Orquestador de Transferencia y Codificacion de Archivos IPM
+ * MipManager - Gestor Integrado de Transferencia y Conversion de Archivos IPM
  * 
- * Sistema integrado que orquesta la transferencia de archivos IPM hacia/desde el MIP
+ * Sistema unificado que gestiona la transferencia de archivos IPM hacia/desde el MIP
  * de Mastercard, con capacidad de conversion automatica entre formatos ASCII y EBCDIC.
  * 
  * FUNCIONALIDAD PRINCIPAL:
  * 
- * Este orquestador actua como capa de abstraccion sobre dos componentes:
+ * Este gestor actua como capa de abstraccion sobre dos componentes:
  * 1. MipFileTransfer: Maneja la transferencia TCP/IP con el MIP
- * 2. Rdw1014Tool: Maneja la codificacion/decodificacion EBCDIC <-> ASCII
+ * 2. IpmConverter: Maneja la codificacion/decodificacion EBCDIC <-> ASCII
  * 
  * FLUJOS DE OPERACION:
  * 
- * ┌─────────────────────────────────────────────────────────────────┐
- * │ MODO SEND (TO Mastercard)                                       │
- * └─────────────────────────────────────────────────────────────────┘
+ * --------------------------------------------------------------------
+ * MODO SEND (TO Mastercard)
+ * --------------------------------------------------------------------
  * 
  * CASO 1: Archivo ya en EBCDIC (--encode EBCDIC)
- * ──────────────────────────────────────────────
+ * ------------------------------------------------
  * [Archivo EBCDIC] -> MipFileTransfer -> [MIP]
  * 
  * Flujo directo sin conversion. El archivo ya tiene el formato IPM
  * correcto con RDW, VBS y 1014-blocking.
  * 
  * CASO 2: Archivo en ASCII (--encode ASCII)
- * ──────────────────────────────────────────
- * [Archivo ASCII] -> Rdw1014Tool (encode) -> [Archivo IPM temporal]
+ * ------------------------------------------
+ * [Archivo ASCII] -> IpmConverter (encode) -> [Archivo IPM temporal]
  *                                                       |
  *                                                       v
  *                                          MipFileTransfer -> [MIP]
@@ -36,31 +36,31 @@ import java.util.*;
  *                                                       v
  *                                          [Limpieza de temporal]
  * 
- * El archivo ASCII se convierte primero a formato IPM usando Rdw1014Tool,
+ * El archivo ASCII se convierte primero a formato IPM usando IpmConverter,
  * creando un archivo temporal. Luego se transfiere y se elimina el temporal.
  * 
- * ┌─────────────────────────────────────────────────────────────────┐
- * │ MODO RECEIVE (FROM Mastercard)                                  │
- * └─────────────────────────────────────────────────────────────────┘
+ * --------------------------------------------------------------------
+ * MODO RECEIVE (FROM Mastercard)
+ * --------------------------------------------------------------------
  * 
  * CASO 1: Mantener en EBCDIC (--encode EBCDIC)
- * ─────────────────────────────────────────────
+ * ---------------------------------------------
  * [MIP] -> MipFileTransfer -> [Archivo EBCDIC]
  * 
  * Flujo directo. El archivo se guarda tal cual en formato IPM.
  * 
  * CASO 2: Convertir a ASCII (--encode ASCII)
- * ───────────────────────────────────────────
+ * -------------------------------------------
  * [MIP] -> MipFileTransfer -> [Archivo IPM temporal]
  *                                      |
  *                                      v
- *                         Rdw1014Tool (decode) -> [Archivos ASCII]
+ *                         IpmConverter (decode) -> [Archivo ASCII]
  *                                      |
  *                                      v
  *                         [Limpieza de temporal]
  * 
  * El archivo se recibe como IPM temporal, se decodifica a ASCII usando
- * Rdw1014Tool, y se elimina el temporal.
+ * IpmConverter, y se elimina el temporal.
  * 
  * PARAMETROS:
  * 
@@ -77,6 +77,15 @@ import java.util.*;
  * con nombres unicos usando timestamp y UUID. Se garantiza su eliminacion
  * incluso en caso de error mediante bloques finally.
  * 
+ * MODO DEBUG:
+ * 
+ * Al activar el modo debug con -Dmip.debug=true, se propaga automaticamente
+ * a todos los componentes (MipFileTransfer e IpmConverter), mostrando:
+ * - Detalles de conexion y protocolo
+ * - Bytes en hexadecimal
+ * - Deteccion de estructuras (RDW, blocking)
+ * - Procesamiento de registros
+ * 
  * MANEJO DE ERRORES:
  * 
  * - Validacion exhaustiva de parametros
@@ -86,23 +95,28 @@ import java.util.*;
  * 
  * INTEGRACION:
  * 
- * Este programa invoca MipFileTransfer y Rdw1014Tool como procesos externos
- * usando java -cp, lo que permite desacoplamiento completo y manejo robusto
- * de errores. Ambos componentes deben estar compilados (.class) y en el classpath.
+ * Este programa NO reimplementa logica, sino que invoca:
+ * - MipFileTransfer.main() para transferencias
+ * - IpmConverter.main() para conversiones
+ * 
+ * Ambos componentes deben estar compilados y en el classpath.
  * 
  * Referencias:
  * - MipFileTransfer: Protocolo MIP de Mastercard
- * - Rdw1014Tool: Formato VBS con RDW y 1014-blocking
+ * - IpmConverter: Formato VBS con RDW y 1014-blocking
  * - GCMS Reference Manual: Especificacion de archivos IPM
  * 
  * @author Sistema de Integracion Mastercard
- * @version 1.0
+ * @version 2.0
  * @since 2024
  */
-public class MipOrchestrator {
+public class MipManager {
 
     // Directorio temporal del sistema para archivos intermedios
     private static final String TEMP_DIR = System.getProperty("java.io.tmpdir");
+    
+    // Flag de debug global que se propaga a componentes
+    private static final boolean DEBUG = Boolean.getBoolean("mip.debug");
 
     public static void main(String[] args) {
         try {
@@ -131,7 +145,7 @@ public class MipOrchestrator {
             System.err.println("ERROR FATAL");
             System.err.println("==============================================");
             System.err.println(e.getMessage());
-            if (Boolean.getBoolean("debug")) {
+            if (DEBUG) {
                 e.printStackTrace();
             }
             System.err.println("==============================================");
@@ -155,12 +169,15 @@ public class MipOrchestrator {
      */
     private static void executeSend(Params p) throws Exception {
         System.out.println("==============================================");
-        System.out.println("MIP ORCHESTRATOR - MODO SEND");
+        System.out.println("MIP MANAGER - MODO SEND");
         System.out.println("==============================================");
         System.out.println("Archivo origen : " + p.file);
         System.out.println("Formato        : " + p.encode);
         System.out.println("Transmission ID: " + p.ipmName);
         System.out.println("MIP destino    : " + p.ip + ":" + p.port);
+        if (DEBUG) {
+            System.out.println("Modo DEBUG     : ACTIVADO (se propaga a componentes)");
+        }
         System.out.println("==============================================\n");
 
         // Validar que archivo origen exista
@@ -190,7 +207,7 @@ public class MipOrchestrator {
 
             File tempIpm = null;
             try {
-                // PASO 1: Convertir ASCII a IPM usando Rdw1014Tool
+                // PASO 1: Convertir ASCII a IPM usando IpmConverter
                 System.out.println("[1/3] Convirtiendo ASCII a formato IPM...");
                 tempIpm = createTempFile("ipm_encoded_", ".ipm");
                 System.out.println("Archivo temporal: " + tempIpm.getAbsolutePath());
@@ -251,12 +268,15 @@ public class MipOrchestrator {
      */
     private static void executeReceive(Params p) throws Exception {
         System.out.println("==============================================");
-        System.out.println("MIP ORCHESTRATOR - MODO RECEIVE");
+        System.out.println("MIP MANAGER - MODO RECEIVE");
         System.out.println("==============================================");
         System.out.println("Archivo destino: " + p.file);
         System.out.println("Formato        : " + p.encode);
         System.out.println("Transmission ID: " + p.ipmName);
         System.out.println("MIP origen     : " + p.ip + ":" + p.port);
+        if (DEBUG) {
+            System.out.println("Modo DEBUG     : ACTIVADO (se propaga a componentes)");
+        }
         System.out.println("==============================================\n");
 
         if ("EBCDIC".equalsIgnoreCase(p.encode)) {
@@ -288,22 +308,12 @@ public class MipOrchestrator {
                 receiveFileDirect(p.ip, p.port, tempIpm.getAbsolutePath(), p.ipmName);
                 System.out.println("Recepcion completada\n");
 
-                // PASO 2: Decodificar IPM a ASCII usando Rdw1014Tool
+                // PASO 2: Decodificar IPM a ASCII usando IpmConverter
                 System.out.println("[2/3] Decodificando IPM a formato ASCII...");
                 
-                // Preparar directorio de salida
-                File outputDir = new File(p.file);
-                if (outputDir.exists() && outputDir.isFile()) {
-                    throw new IllegalArgumentException(
-                        "Para modo receive con ASCII, --file debe ser un directorio, no un archivo");
-                }
-                if (!outputDir.exists()) {
-                    outputDir.mkdirs();
-                }
-                
-                decodeIpmToAscii(tempIpm.getAbsolutePath(), outputDir.getAbsolutePath());
+                decodeIpmToAscii(tempIpm.getAbsolutePath(), p.file);
                 System.out.println("Decodificacion completada");
-                System.out.println("Archivos en: " + outputDir.getAbsolutePath() + "\n");
+                System.out.println("Archivo guardado: " + p.file + "\n");
 
                 // PASO 3: Limpiar archivo temporal
                 System.out.println("[3/3] Limpiando archivos temporales...");
@@ -316,7 +326,7 @@ public class MipOrchestrator {
 
                 System.out.println("\n==============================================");
                 System.out.println("RECEPCION COMPLETADA EXITOSAMENTE");
-                System.out.println("Archivos en: " + outputDir.getAbsolutePath());
+                System.out.println("Archivo guardado: " + p.file);
                 System.out.println("Conversion: IPM -> ASCII");
                 System.out.println("==============================================");
 
@@ -346,6 +356,8 @@ public class MipOrchestrator {
      * 
      * Ejecuta: java MipFileTransfer --mode send --ip ... --port ... --file ... --ipmname ...
      * 
+     * Si el modo DEBUG esta activo, se propaga con -Dmip.debug=true
+     * 
      * @param ip Direccion IP del MIP
      * @param port Puerto del MIP
      * @param filePath Path del archivo a enviar
@@ -357,6 +369,12 @@ public class MipOrchestrator {
         
         List<String> command = new ArrayList<String>();
         command.add("java");
+        
+        // Propagar flag de debug si esta activo
+        if (DEBUG) {
+            command.add("-Dmip.debug=true");
+        }
+        
         command.add("MipFileTransfer");
         command.add("--mode");
         command.add("send");
@@ -377,6 +395,8 @@ public class MipOrchestrator {
      * 
      * Ejecuta: java MipFileTransfer --mode receive --ip ... --port ... --file ... --ipmname ...
      * 
+     * Si el modo DEBUG esta activo, se propaga con -Dmip.debug=true
+     * 
      * @param ip Direccion IP del MIP
      * @param port Puerto del MIP
      * @param filePath Path donde guardar el archivo
@@ -388,6 +408,12 @@ public class MipOrchestrator {
         
         List<String> command = new ArrayList<String>();
         command.add("java");
+        
+        // Propagar flag de debug si esta activo
+        if (DEBUG) {
+            command.add("-Dmip.debug=true");
+        }
+        
         command.add("MipFileTransfer");
         command.add("--mode");
         command.add("receive");
@@ -404,9 +430,11 @@ public class MipOrchestrator {
     }
 
     /**
-     * Codifica archivo ASCII a formato IPM usando Rdw1014Tool como proceso externo
+     * Codifica archivo ASCII a formato IPM usando IpmConverter como proceso externo
      * 
-     * Ejecuta: java Rdw1014Tool encode --input ... --output ...
+     * Ejecuta: java IpmConverter encode --input ... --output ...
+     * 
+     * Si el modo DEBUG esta activo, se propaga con -Dipm.debug=true
      * 
      * @param inputAscii Path del archivo ASCII de entrada
      * @param outputIpm Path del archivo IPM de salida
@@ -417,38 +445,54 @@ public class MipOrchestrator {
         
         List<String> command = new ArrayList<String>();
         command.add("java");
-        command.add("Rdw1014Tool");
+        
+        // Propagar flag de debug si esta activo
+        if (DEBUG) {
+            command.add("-Dipm.debug=true");
+        }
+        
+        command.add("IpmConverter");
         command.add("encode");
         command.add("--input");
         command.add(inputAscii);
         command.add("--output");
         command.add(outputIpm);
         
-        executeJavaProcess(command, "Rdw1014Tool (encode)");
+        executeJavaProcess(command, "IpmConverter (encode)");
     }
 
     /**
-     * Decodifica archivo IPM a formato ASCII usando Rdw1014Tool como proceso externo
+     * Decodifica archivo IPM a formato ASCII usando IpmConverter como proceso externo
      * 
-     * Ejecuta: java Rdw1014Tool decode --input ... --output ...
+     * Ejecuta: java IpmConverter decode --input ... --output ...
+     * 
+     * Si el modo DEBUG esta activo, se propaga con -Dipm.debug=true
+     * 
+     * Genera un archivo de texto con todos los registros, uno por linea.
      * 
      * @param inputIpm Path del archivo IPM de entrada
-     * @param outputDir Path del directorio de salida
+     * @param outputFile Path del archivo de salida
      * @throws Exception Si la decodificacion falla
      */
-    private static void decodeIpmToAscii(String inputIpm, String outputDir) 
+    private static void decodeIpmToAscii(String inputIpm, String outputFile) 
             throws Exception {
         
         List<String> command = new ArrayList<String>();
         command.add("java");
-        command.add("Rdw1014Tool");
+        
+        // Propagar flag de debug si esta activo
+        if (DEBUG) {
+            command.add("-Dipm.debug=true");
+        }
+        
+        command.add("IpmConverter");
         command.add("decode");
         command.add("--input");
         command.add(inputIpm);
         command.add("--output");
-        command.add(outputDir);
+        command.add(outputFile);
         
-        executeJavaProcess(command, "Rdw1014Tool (decode)");
+        executeJavaProcess(command, "IpmConverter (decode)");
     }
 
     /**
@@ -467,6 +511,10 @@ public class MipOrchestrator {
      */
     private static void executeJavaProcess(List<String> command, String processName) 
             throws Exception {
+        
+        if (DEBUG) {
+            System.out.println("DEBUG: Ejecutando: " + String.join(" ", command));
+        }
         
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true); // Combinar stderr con stdout
@@ -532,11 +580,11 @@ public class MipOrchestrator {
     private static void printUsage() {
         System.out.println(
             "==============================================\n" +
-            "MIP ORCHESTRATOR - Sistema Integrado de Transferencia IPM\n" +
+            "MIP MANAGER - Sistema Integrado de Transferencia IPM\n" +
             "==============================================\n" +
             "\n" +
             "Uso:\n" +
-            "  java MipOrchestrator --mode <send|receive> --ip <host> --port <puerto> \\\n" +
+            "  java MipManager --mode <send|receive> --ip <host> --port <puerto> \\\n" +
             "       --file <path> --encode <EBCDIC|ASCII> --ipmname <id>\n" +
             "\n" +
             "Parametros:\n" +
@@ -564,8 +612,7 @@ public class MipOrchestrator {
             "  --encode EBCDIC : Recibe y guarda archivo IPM directamente\n" +
             "  --encode ASCII  : Recibe IPM, decodifica a ASCII, limpia temporal\n" +
             "\n" +
-            "  --file : Para EBCDIC: ruta del archivo destino\n" +
-            "           Para ASCII: directorio donde guardar registros decodificados\n" +
+            "  --file : Ruta del archivo destino (EBCDIC o ASCII)\n" +
             "\n" +
             "Transmission ID:\n" +
             "  SEND    : R + tipo(3) + endpoint(5) [+ julian(3) + seq(2)]\n" +
@@ -577,19 +624,19 @@ public class MipOrchestrator {
             "Ejemplos:\n" +
             "\n" +
             "  1. Enviar archivo ASCII (conversion automatica):\n" +
-            "     java MipOrchestrator --mode send --ip 10.0.0.1 --port 5000 \\\n" +
+            "     java MipManager --mode send --ip 10.0.0.1 --port 5000 \\\n" +
             "          --file records.txt --encode ASCII --ipmname R11902840\n" +
             "\n" +
             "  2. Enviar archivo EBCDIC (directo):\n" +
-            "     java MipOrchestrator --mode send --ip 10.0.0.1 --port 5000 \\\n" +
+            "     java MipManager --mode send --ip 10.0.0.1 --port 5000 \\\n" +
             "          --file file.ipm --encode EBCDIC --ipmname R11902840\n" +
             "\n" +
             "  3. Recibir y convertir a ASCII:\n" +
-            "     java MipOrchestrator --mode receive --ip 10.0.0.1 --port 5000 \\\n" +
-            "          --file decoded/ --encode ASCII --ipmname T11200157\n" +
+            "     java MipManager --mode receive --ip 10.0.0.1 --port 5000 \\\n" +
+            "          --file output.txt --encode ASCII --ipmname T11200157\n" +
             "\n" +
             "  4. Recibir y mantener en EBCDIC:\n" +
-            "     java MipOrchestrator --mode receive --ip 10.0.0.1 --port 5000 \\\n" +
+            "     java MipManager --mode receive --ip 10.0.0.1 --port 5000 \\\n" +
             "          --file file.ipm --encode EBCDIC --ipmname T11200157\n" +
             "\n" +
             "Archivos Temporales:\n" +
@@ -597,10 +644,21 @@ public class MipOrchestrator {
             "  Se eliminan automaticamente despues de uso exitoso\n" +
             "  En caso de error, pueden quedar archivos con patron: ipm_*_*.ipm\n" +
             "\n" +
+            "Modo Debug:\n" +
+            "  Para diagnostico detallado, ejecutar con:\n" +
+            "  java -Dmip.debug=true MipManager ...\n" +
+            "\n" +
+            "  El modo debug se propaga automaticamente a todos los componentes\n" +
+            "  (MipFileTransfer e IpmConverter), mostrando:\n" +
+            "  - Detalles de protocolo y conexion\n" +
+            "  - Bytes en formato hexadecimal\n" +
+            "  - Deteccion de estructuras RDW y blocking\n" +
+            "  - Procesamiento de registros\n" +
+            "\n" +
             "Componentes Requeridos:\n" +
             "  - MipFileTransfer.class : Transferencia TCP/IP con MIP\n" +
-            "  - Rdw1014Tool.class     : Conversion EBCDIC/ASCII con RDW\n" +
-            "  - Ambos deben estar en el mismo directorio que MipOrchestrator.class\n" +
+            "  - IpmConverter.class    : Conversion EBCDIC/ASCII con RDW\n" +
+            "  - Ambos deben estar en el mismo directorio que MipManager.class\n" +
             "\n" +
             "Exit Codes:\n" +
             "  0 : Operacion exitosa\n" +
